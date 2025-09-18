@@ -114,26 +114,43 @@ router.patch('/:id', async (req, res) => {
     }
 })
 
-router.delete('/:id', async (req, res) => {
-    try {
+// 파일 삭제 API (DB 문서 + S3 객체 동시 삭제)
+router.delete("/:id", async (req, res) => {
+  try {
+    // DB에서 해당 id 문서 찾기
+    const it = await FileItem.findById(req.params.id);
+
+    // 없으면 404 Not Found 반환
+    if (!it) return res.sendStatus(404);
 
 
-        const it = await FileItem.findByIdAndDelete(req.params.id)
+    
+    // 1) Key 정규화: 혹시 인코딩된 상태면 복원
+    const rawKey = typeof it.key === 'string' ? it.key : '';
+    const key = decodeURIComponent(rawKey);
 
-        if (!it) return res.sendStatus(404)
 
-            await deleteObject(it.key)
-            await it.deleteOne()
-
-        res.status(201).json({ message: "파일 삭제 완료",id: req.params.id })
-
-    } catch (error) {
-        console.error('파일 삭제 에러', error)
-        res.status(500).json({ error: "S3 파일 삭제 실패" })
+    // 2) 안전장치: 우리가 관리하는 prefix만 허용
+    if (!key.startsWith('uploads/')) {
+      console.warn('[DEL] Blocked delete for unexpected key:', key);
+      return res.status(400).json({ error: '삭제 가능한 경로가 아닙니다.' });
     }
-})
 
+        // 3) 디버그 로그로 실제 지우는 키 확인
+    console.log('[DEL] S3 delete key =', key);
 
+    // S3 버킷에서 실제 파일 삭제
+    await deleteObject(it.key);
 
+    // DB에서 메타데이터 문서 삭제
+    await it.deleteOne();
+
+    // 성공 시 202 
+     return res.status(204).end();
+  } catch (error) {
+    console.error("❌ 파일 삭제 에러:", error);
+    res.status(500).json({ error: "파일 삭제 실패" });
+  }
+});
 
 export default router
